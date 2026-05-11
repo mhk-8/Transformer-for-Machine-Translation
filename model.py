@@ -30,6 +30,7 @@ import torch.nn.functional as F
 #    Exposed at module level so the autograder can import and test it
 #    independently of MultiHeadAttention.
 # ══════════════════════════════════════════════════════════════════════
+UNK_IDX, PAD_IDX, SOS_IDX, EOS_IDX = 0, 1, 2, 3
 
 def scaled_dot_product_attention(
     Q: torch.Tensor,
@@ -674,7 +675,7 @@ class Transformer(nn.Module):
         ]
         return ' '.join(words)
     
-UNK_IDX, PAD_IDX, SOS_IDX, EOS_IDX = 0, 1, 2, 3
+
     
 if __name__ == '__main__':
     print("Running shape checks...\n")
