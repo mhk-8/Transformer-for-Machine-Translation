@@ -625,9 +625,9 @@ class Transformer(nn.Module):
         return self.decode(memory, src_mask, tgt, tgt_mask)
 
 
-    def infer(self, src_sentence: str, spacy_de,
-        src_stoi:    dict,
-        tgt_itos:    list,
+    def infer(self, src_sentence: str, spacy_de = None,
+        src_stoi = None,
+        tgt_itos = None,
         device:      str = 'cpu',
         max_len:     int = 100,
         ) -> str:
@@ -642,7 +642,19 @@ class Transformer(nn.Module):
             The fully translated English string, detokenized and clean.
         """
         self.eval()
- 
+
+        if spacy_de is None:
+            import spacy
+            spacy_de = spacy.load("de_core_news_sm")
+            
+        if src_stoi is None or tgt_itos is None:
+            from dataset import Multi30kDataset
+            # Rebuild the deterministic vocabulary used during training
+            train_ds = Multi30kDataset(split='train', min_freq=2)
+            train_ds.build_vocab()
+            src_stoi = train_ds.src_stoi
+            tgt_itos = train_ds.tgt_vocab
+            
         # Special indices — must match dataset.py constants
         sos_idx = src_stoi.get('<sos>', SOS_IDX)
         eos_idx = src_stoi.get('<eos>', EOS_IDX)
