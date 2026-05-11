@@ -87,7 +87,7 @@ class LabelSmoothingLoss(nn.Module):
         loss = F.kl_div(log_probs, smooth_dist, reduction='sum')
  
         # Normalise by the number of real (non-pad) tokens in the batch
-        num_tokens = (~pad_positions).sum().float()
+        num_tokens = (~pad_positions).sum().float().clamp(min=1.0)
         return loss / num_tokens.clamp(min=1.0)
 
 
@@ -127,7 +127,9 @@ def run_epoch(
     total_loss   = 0.0
     total_tokens = 0
     mode_label   = "Train" if is_train else "Val"
- 
+    total_grad_norm = 0.0
+    num_batches     = 0
+    
     progress = tqdm(
         data_iter,
         desc=f"Epoch {epoch_num} [{mode_label}]",
@@ -172,8 +174,9 @@ def run_epoch(
  
                 # Gradient clipping — prevents exploding gradients,
                 # especially important early in training
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
- 
+                grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                total_grad_norm += grad_norm.item()
+                
                 optimizer.step()
                 scheduler.step()
  
@@ -182,25 +185,24 @@ def run_epoch(
             num_tokens  = (tgt_out != PAD_IDX).sum().item()
             total_loss  += loss.item() * num_tokens
             total_tokens += num_tokens
- 
-            current_lr = (
-                optimizer.param_groups[0]['lr'] if is_train else 0.0
-            )
-            progress.set_postfix(
-                loss=f"{loss.item():.4f}",
-                lr=f"{current_lr:.2e}",
-            )
+            num_batches  += 1
+            
+            current_lr = optimizer.param_groups[0]['lr'] if is_train else 0.0
+            progress.set_postfix(loss=f"{loss.item():.4f}",lr=f"{current_lr:.2e}")
  
     avg_loss = total_loss / max(total_tokens, 1)
- 
+    avg_grad_norm = total_grad_norm / max(num_batches, 1) if is_train else 0.0
+    
     # Log to W&B — only if a run is active
     if wandb.run is not None:
         log_dict = {
             f"{mode_label.lower()}/loss": avg_loss,
+            f"{mode_label.lower()}/perplexity": math.exp(min(avg_loss, 20)),
             "epoch": epoch_num,
         }
         if is_train and optimizer is not None:
             log_dict["train/lr"] = optimizer.param_groups[0]['lr']
+            log_dict["train/grad_norm"] = avg_grad_norm
         wandb.log(log_dict)
  
     return avg_loss
@@ -298,7 +300,7 @@ def _tokens_to_sentence(indices: list[int], tgt_vocab: list[str]) -> str:
 def evaluate_bleu(
     model: Transformer,
     test_dataloader: DataLoader,
-    tgt_vocab,
+    tgt_vocab: list,
     device: str = "cpu",
     max_len: int = 100,
 ) -> float:
@@ -419,14 +421,16 @@ def save_checkpoint(
          'd_ff': ..., 'dropout': ...}
     """
     # TODO: implement using torch.save({...}, path)
+    enc0 = model.encoder.layers[0]
+
     model_config = {
         'src_vocab_size': model.src_embed.num_embeddings,
         'tgt_vocab_size': model.tgt_embed.num_embeddings,
         'd_model':        model.d_model,
         'N':              len(model.encoder.layers),
-        'num_heads':      model.encoder.layers[0].self_attn.num_heads,
-        'd_ff':           model.encoder.layers[0].ffn.linear1.out_features,
-        'dropout':        model.encoder.layers[0].dropout.p,
+        'num_heads':      enc0.self_attn.num_heads,
+        'd_ff':           enc0.ffn.linear1.out_features,
+        'dropout':        getattr(enc0.dropout, 'p', 0.1)
     }
  
     torch.save(
@@ -437,7 +441,7 @@ def save_checkpoint(
             'scheduler_state_dict': scheduler.state_dict(),
             'model_config':         model_config,
         },
-        path,
+        path
     )
     print(f"[checkpoint] Saved epoch {epoch} → {path}")
 
@@ -476,7 +480,63 @@ def load_checkpoint(
     print(f"[checkpoint] Loaded epoch {epoch} from {path}")
     return epoch
 
-
+# ══════════════════════════════════════════════════════════════════════
+#  W&B SAMPLE TRANSLATION LOGGING
+# ══════════════════════════════════════════════════════════════════════
+ 
+def log_sample_translations(
+    model:      Transformer,
+    dataset,
+    num_samples: int = 5,
+    device:      str = 'cpu',
+    epoch:       int = 0,
+) -> None:
+    """
+    Decode a handful of examples and log them to W&B as a Table.
+    This makes it easy to eyeball translation quality during training.
+ 
+    Args:
+        model       : Trained Transformer.
+        dataset     : Multi30kDataset with data, src_vocab, tgt_vocab populated.
+        num_samples : Number of examples to decode (default 5).
+        device      : 'cpu' or 'cuda'.
+        epoch       : Current epoch, used as the W&B step key.
+    """
+    if wandb.run is None:
+        return
+ 
+    model.eval()
+    table = wandb.Table(columns=["epoch", "source (DE)", "reference (EN)", "hypothesis (EN)"])
+ 
+    # Sample from the first num_samples examples for reproducibility
+    indices = range(min(num_samples, len(dataset)))
+ 
+    with torch.no_grad():
+        for idx in indices:
+            src_tensor, tgt_tensor = dataset[idx]
+            src_tensor = src_tensor.unsqueeze(0).to(device)
+            tgt_tensor = tgt_tensor.unsqueeze(0).to(device)
+ 
+            src_mask = make_src_mask(src_tensor, pad_idx=PAD_IDX)
+            output   = greedy_decode(
+                model, src_tensor, src_mask,
+                max_len=100,
+                start_symbol=SOS_IDX,
+                end_symbol=EOS_IDX,
+                device=device,
+            )
+ 
+            # Reconstruct source German sentence
+            src_ids  = src_tensor[0].tolist()
+            src_str  = _tokens_to_sentence(src_ids,         dataset.src_vocab)
+            ref_str  = _tokens_to_sentence(tgt_tensor[0].tolist(), dataset.tgt_vocab)
+            hyp_str  = _tokens_to_sentence(output[0].tolist(),     dataset.tgt_vocab)
+ 
+            table.add_data(epoch, src_str, ref_str, hyp_str)
+ 
+    wandb.log({"translations": table, "epoch": epoch})
+    
+    
 # ══════════════════════════════════════════════════════════════════════
 #   EXPERIMENT ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════
@@ -536,13 +596,13 @@ def run_training_experiment() -> None:
     wandb.init(
         project="da6401-a3",
         config=config,
-        name=f"transformer-d{config['d_model']}-N{config['N']}",
+        name=f"transformer-d{config['d_model']}-N{config['N']}-h{config['num_heads']}"
     )
  
     # ── 2. Build datasets ─────────────────────────────────────────────
     print("[train] Loading and preprocessing data ...")
  
-    train_ds = Multi30kDataset(split='train',      min_freq=config['min_freq'])
+    train_ds = Multi30kDataset(split='train',min_freq=config['min_freq'])
     train_ds.build_vocab()
     train_ds.process_data()
  
@@ -564,7 +624,11 @@ def run_training_experiment() -> None:
     src_vocab_size = len(train_ds.src_vocab)
     tgt_vocab_size = len(train_ds.tgt_vocab)
     print(f"[train] Vocab sizes — DE: {src_vocab_size:,}  EN: {tgt_vocab_size:,}")
- 
+    wandb.config.update({
+        'src_vocab_size': src_vocab_size,
+        'tgt_vocab_size': tgt_vocab_size
+    })
+    
     # ── 3. DataLoaders ────────────────────────────────────────────────
     # num_workers=2 is safe on Kaggle; set to 0 if you hit pickling errors
     train_loader = train_ds.get_dataloader(
@@ -644,16 +708,23 @@ def run_training_experiment() -> None:
         elapsed = time.time() - epoch_start
         print(
             f"Epoch {epoch:3d}/{config['num_epochs']} | "
-            f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f} | "
+            f"train={train_loss:.4f}  val={val_loss:.4f} | "
+            f"ppl={math.exp(min(val_loss, 20)):.2f} | "
             f"lr={optimizer.param_groups[0]['lr']:.2e} | "
             f"{elapsed:.0f}s"
         )
- 
+        
+        # Log sample translations every 5 epochs to track qualitative progress
+        if epoch % 5 == 0:
+            log_sample_translations(
+                model, val_ds, num_samples=5, device=device, epoch=epoch,
+            )
         # Save best model separately so we can restore it for BLEU eval
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             save_checkpoint(model, optimizer, scheduler, epoch, path='best_model.pt')
- 
+            print(f"  ↳ new best val_loss={val_loss:.4f} — saved best_model.pt")
+            
         # Periodic checkpoint so we can resume if Kaggle session restarts
         if epoch % config['ckpt_every'] == 0:
             save_checkpoint(
@@ -664,7 +735,7 @@ def run_training_experiment() -> None:
     # Always save the final state
     save_checkpoint(
         model, optimizer, scheduler, config['num_epochs'],
-        path=config['ckpt_path'],
+        path=config['ckpt_path']
     )
  
     # ── 9. Final BLEU on test set ─────────────────────────────────────
@@ -682,8 +753,19 @@ def run_training_experiment() -> None:
     )
  
     print(f"\n[train] Test BLEU: {bleu:.2f}")
-    wandb.log({'test_bleu': bleu})
+    wandb.log({
+        'test/bleu':      bleu,
+        'best_val_loss':  best_val_loss,
+        'best_val_ppl':   math.exp(min(best_val_loss, 20)),
+    })
+ 
+    # Log a final batch of sample translations on the test set
+    log_sample_translations(
+        model, test_ds, num_samples=10, device=device, epoch=config['num_epochs'],
+    )
+ 
     wandb.finish()
+    print("[train] Done.")
  
     
     

@@ -69,7 +69,8 @@ def scaled_dot_product_attention(
  
     # Step 3: softmax over the key dimension to get attention weights
     attn_w = F.softmax(scores, dim=-1)
- 
+    attn_w = torch.nan_to_num(attn_w, nan=0.0)
+    
     # Step 4: weighted sum of values
     output = torch.matmul(attn_w, V)
  
@@ -508,7 +509,7 @@ class Transformer(nn.Module):
         dropout:   float = 0.1,
         checkpoint_path: str = None,
     ) -> None:
-        super().__init__()
+        
         # TODO: Instantiate 
         # init should also load the model weights if checkpoint path provided, download the .pth file like this
         super().__init__()
@@ -517,8 +518,8 @@ class Transformer(nn.Module):
  
         # --- Embeddings ---
         # Separate embedding tables for source and target vocabularies
-        self.src_embed = nn.Embedding(src_vocab_size, d_model)
-        self.tgt_embed = nn.Embedding(tgt_vocab_size, d_model)
+        self.src_embed = nn.Embedding(src_vocab_size, d_model, padding_idx=PAD_IDX)
+        self.tgt_embed = nn.Embedding(tgt_vocab_size, d_model, padding_idx=PAD_IDX)
  
         # Shared positional encoding (same formula for both src & tgt)
         self.pos_enc = PositionalEncoding(d_model, dropout)
@@ -618,7 +619,12 @@ class Transformer(nn.Module):
         return self.decode(memory, src_mask, tgt, tgt_mask)
 
 
-    def infer(self, src_sentence: str) -> str:
+    def infer(self, src_sentence: str, spacy_de,
+        src_stoi:    dict,
+        tgt_itos:    list,
+        device:      str = 'cpu',
+        max_len:     int = 100,
+        ) -> str:
         """
         Translates a German sentence to English using greedy autoregressive decoding.
         
@@ -631,40 +637,44 @@ class Transformer(nn.Module):
         """
         self.eval()
  
-        # Tokenise and convert to indices
-        tokens = [tok.text.lower() for tok in spacy_de.tokenizer(src_sentence)]
-        sos_idx = src_vocab.stoi.get('<sos>', 2)
-        eos_idx = src_vocab.stoi.get('<eos>', 3)
-        unk_idx = src_vocab.stoi.get('<unk>', 0)
+        # Special indices — must match dataset.py constants
+        sos_idx = src_stoi.get('<sos>', SOS_IDX)
+        eos_idx = src_stoi.get('<eos>', EOS_IDX)
+        unk_idx = src_stoi.get('<unk>', UNK_IDX)
+        pad_idx = src_stoi.get('<pad>', PAD_IDX)
  
-        src_indices = [sos_idx] + [src_vocab.stoi.get(t, unk_idx) for t in tokens] + [eos_idx]
-        src_tensor  = torch.tensor(src_indices, dtype=torch.long).unsqueeze(0).to(device)
+        tokens = [tok.text.lower() for tok in spacy_de.tokenizer(src_sentence)]
+        src_ids = (
+            [sos_idx]
+            + [src_stoi.get(t, unk_idx) for t in tokens]
+            + [eos_idx]
+        )
+        src_tensor = torch.tensor(src_ids, dtype=torch.long, device=device).unsqueeze(0)
  
         with torch.no_grad():
-            src_mask = make_src_mask(src_tensor)
+            src_mask = make_src_mask(src_tensor, pad_idx=pad_idx)
             memory   = self.encode(src_tensor, src_mask)
  
-            # Start decoding with <sos>
-            ys = torch.tensor([[sos_idx]], dtype=torch.long).to(device)
+            ys = torch.tensor([[sos_idx]], dtype=torch.long, device=device)
  
             for _ in range(max_len):
-                tgt_mask = make_tgt_mask(ys)
+                tgt_mask = make_tgt_mask(ys, pad_idx=pad_idx)
                 logits   = self.decode(memory, src_mask, ys, tgt_mask)
                 next_tok = logits[:, -1, :].argmax(dim=-1, keepdim=True)
                 ys       = torch.cat([ys, next_tok], dim=1)
                 if next_tok.item() == eos_idx:
                     break
  
-        # Convert indices back to words, skipping special tokens
-        special = {sos_idx, eos_idx, src_vocab.stoi.get('<pad>', 1)}
-        tokens_out = []
-        for idx in ys[0].tolist():
-            if idx in special:
-                continue
-            tokens_out.append(tgt_vocab.itos[idx] if hasattr(tgt_vocab, 'itos')
-                              else tgt_vocab.lookup_token(idx))
- 
-        return ' '.join(tokens_out)
+        # Convert indices back to words; skip all special tokens
+        special = {sos_idx, eos_idx, pad_idx, unk_idx}
+        words   = [
+            tgt_itos[i]
+            for i in ys[0].tolist()
+            if i not in special and i < len(tgt_itos)
+        ]
+        return ' '.join(words)
+    
+UNK_IDX, PAD_IDX, SOS_IDX, EOS_IDX = 0, 1, 2, 3
     
 if __name__ == '__main__':
     print("Running shape checks...\n")

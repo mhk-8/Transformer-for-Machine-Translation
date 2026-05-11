@@ -10,8 +10,8 @@ from datasets import load_dataset
 UNK_IDX, PAD_IDX, SOS_IDX, EOS_IDX = 0, 1, 2, 3
 SPECIAL_TOKENS = ['<unk>', '<pad>', '<sos>', '<eos>']
 
-class Multi30kDataset:
-    def __init__(self, split='train'):
+class Multi30kDataset(Dataset):
+    def __init__(self, split='train', min_freq: int = 2):
         """
         Loads the Multi30k dataset and prepares tokenizers.
         """
@@ -185,6 +185,7 @@ class Multi30kDataset:
             shuffle=shuffle,
             collate_fn=self._collate_fn,
             num_workers=num_workers,
+            pin_memory=True
         )
         
         
