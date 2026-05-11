@@ -508,7 +508,7 @@ class Transformer(nn.Module):
         num_heads: int   = 8,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
-        checkpoint_path: str = None,
+        checkpoint_path: str = 'best_model.pt',
     ) -> None:
         
         # TODO: Instantiate 
@@ -539,6 +539,33 @@ class Transformer(nn.Module):
  
         # --- Weight initialisation (Xavier uniform, as in the paper) ---
         self._init_weights()
+        
+        import spacy
+        from spacy.cli import download as spacy_download
+        
+        # 1. Download spaCy models dynamically if they are missing in the autograder
+        try:
+            spacy.load("de_core_news_sm")
+        except OSError:
+            print("Downloading de_core_news_sm...")
+            spacy_download("de_core_news_sm")
+            
+        try:
+            spacy.load("en_core_web_sm")
+        except OSError:
+            print("Downloading en_core_web_sm...")
+            spacy_download("en_core_web_sm")
+
+        # 2. Store the German tokenizer as an instance variable
+        self.spacy_de = spacy.load("de_core_news_sm")
+        
+        # 3. Build and store the vocabulary
+        from dataset import Multi30kDataset
+        print("Building vocabulary for inference...")
+        train_ds = Multi30kDataset(split='train', min_freq=2)
+        train_ds.build_vocab()
+        self.src_stoi = train_ds.src_stoi
+        self.tgt_itos = train_ds.tgt_vocab
         
         if checkpoint_path is not None:
             if not os.path.exists(checkpoint_path):
@@ -625,9 +652,7 @@ class Transformer(nn.Module):
         return self.decode(memory, src_mask, tgt, tgt_mask)
 
 
-    def infer(self, src_sentence: str, spacy_de = None,
-        src_stoi = None,
-        tgt_itos = None,
+    def infer(self, src_sentence: str, 
         device:      str = 'cpu',
         max_len:     int = 100,
         ) -> str:
@@ -642,18 +667,6 @@ class Transformer(nn.Module):
             The fully translated English string, detokenized and clean.
         """
         self.eval()
-
-        if spacy_de is None:
-            import spacy
-            spacy_de = spacy.load("de_core_news_sm")
-            
-        if src_stoi is None or tgt_itos is None:
-            from dataset import Multi30kDataset
-            # Rebuild the deterministic vocabulary used during training
-            train_ds = Multi30kDataset(split='train', min_freq=2)
-            train_ds.build_vocab()
-            src_stoi = train_ds.src_stoi
-            tgt_itos = train_ds.tgt_vocab
             
         # Special indices — must match dataset.py constants
         sos_idx = src_stoi.get('<sos>', SOS_IDX)
@@ -686,9 +699,9 @@ class Transformer(nn.Module):
         # Convert indices back to words; skip all special tokens
         special = {sos_idx, eos_idx, pad_idx, unk_idx}
         words   = [
-            tgt_itos[i]
+            self.tgt_itos[i]
             for i in ys[0].tolist()
-            if i not in special and i < len(tgt_itos)
+            if i not in special and i < len(self.tgt_itos)
         ]
         return ' '.join(words)
     
