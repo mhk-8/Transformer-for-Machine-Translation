@@ -541,7 +541,7 @@ class Transformer(nn.Module):
         self._init_weights()
         
         if checkpoint_path is not None:
-            gdown.download(id="<.pth drive id>", output=checkpoint_path, quiet=False)
+            gdown.download(id="1qx1YLZsE6hmmpbJ3llFndt8y0aC4LH0e", output=checkpoint_path, quiet=False)
             self.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
 
     def _init_weights(self) -> None:
