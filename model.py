@@ -501,8 +501,8 @@ class Transformer(nn.Module):
 
     def __init__(
         self,
-        src_vocab_size: int,
-        tgt_vocab_size: int,
+        src_vocab_size: int = 7854,
+        tgt_vocab_size: int = 5893,
         d_model:   int   = 512,
         N:         int   = 6,
         num_heads: int   = 8,
@@ -541,9 +541,14 @@ class Transformer(nn.Module):
         self._init_weights()
         
         if checkpoint_path is not None:
-            gdown.download(id="1qx1YLZsE6hmmpbJ3llFndt8y0aC4LH0e", output=checkpoint_path, quiet=False)
-            self.load_state_dict(torch.load(checkpoint_path, map_location='cpu'))
-
+            if not os.path.exists(checkpoint_path):
+                # Ensure you paste your actual Google Drive ID here!
+                gdown.download(id="1qx1YLZsE6hmmpbJ3llFndt8y0aC4LH0e", output=checkpoint_path, quiet=False)
+            
+            # Extract 'model_state_dict' from the saved checkpoint dictionary
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            self.load_state_dict(checkpoint['model_state_dict'])
+           
     def _init_weights(self) -> None:
         """Xavier uniform initialisation for all linear and embedding layers."""
         for p in self.parameters():
