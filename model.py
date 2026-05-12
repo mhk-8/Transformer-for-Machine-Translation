@@ -669,15 +669,15 @@ class Transformer(nn.Module):
         self.eval()
             
         # Special indices — must match dataset.py constants
-        sos_idx = src_stoi.get('<sos>', SOS_IDX)
-        eos_idx = src_stoi.get('<eos>', EOS_IDX)
-        unk_idx = src_stoi.get('<unk>', UNK_IDX)
-        pad_idx = src_stoi.get('<pad>', PAD_IDX)
+        sos_idx = self.src_stoi.get('<sos>', SOS_IDX)
+        eos_idx = self.src_stoi.get('<eos>', EOS_IDX)
+        unk_idx = self.src_stoi.get('<unk>', UNK_IDX)
+        pad_idx = self.src_stoi.get('<pad>', PAD_IDX)
  
-        tokens = [tok.text.lower() for tok in spacy_de.tokenizer(src_sentence)]
+        tokens = [tok.text.lower() for tok in self.spacy_de.tokenizer(src_sentence)]
         src_ids = (
             [sos_idx]
-            + [src_stoi.get(t, unk_idx) for t in tokens]
+            + [self.src_stoi.get(t, unk_idx) for t in tokens]
             + [eos_idx]
         )
         src_tensor = torch.tensor(src_ids, dtype=torch.long, device=device).unsqueeze(0)
