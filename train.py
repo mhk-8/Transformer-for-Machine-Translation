@@ -575,7 +575,7 @@ def run_training_experiment() -> None:
  
         # Training
         'batch_size':   128,
-        'num_epochs':   30,
+        'num_epochs':   100,
         'warmup_steps': 4000,
         'label_smooth': 0.1,
         'grad_clip':    1.0,
@@ -585,7 +585,7 @@ def run_training_experiment() -> None:
         'max_len':      100,
  
         # Checkpoint
-        'ckpt_every':   5,     # save a checkpoint every N epochs
+        'ckpt_every':   20,     # save a checkpoint every N epochs
         'ckpt_path':    'checkpoint.pt',
     }
  
