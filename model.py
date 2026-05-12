@@ -570,7 +570,7 @@ class Transformer(nn.Module):
         if checkpoint_path is not None:
             if not os.path.exists(checkpoint_path):
                 # Ensure you paste your actual Google Drive ID here!
-                gdown.download(id="1qx1YLZsE6hmmpbJ3llFndt8y0aC4LH0e", output=checkpoint_path, quiet=False)
+                gdown.download(id="1XIDxuuefaDcfF4FQViKTC1IxoFx_Sl4R", output=checkpoint_path, quiet=False)
             
             # Extract 'model_state_dict' from the saved checkpoint dictionary
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
