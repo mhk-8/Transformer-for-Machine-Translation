@@ -503,10 +503,10 @@ class Transformer(nn.Module):
         self,
         src_vocab_size: int = 7853,
         tgt_vocab_size: int = 5893,
-        d_model:   int   = 512,
-        N:         int   = 6,
+        d_model:   int   = 256,
+        N:         int   = 3,
         num_heads: int   = 8,
-        d_ff:      int   = 2048,
+        d_ff:      int   = 512,
         dropout:   float = 0.1,
         checkpoint_path: str = 'best_model.pt',
     ) -> None:
@@ -562,7 +562,7 @@ class Transformer(nn.Module):
         # 3. Build and store the vocabulary
         from dataset import Multi30kDataset
         print("Building vocabulary for inference...")
-        train_ds = Multi30kDataset(split='train', min_freq=2)
+        train_ds = Multi30kDataset(split='train', min_freq=1)
         train_ds.build_vocab()
         self.src_stoi = train_ds.src_stoi
         self.tgt_itos = train_ds.tgt_vocab

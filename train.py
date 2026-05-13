@@ -240,30 +240,21 @@ def greedy_decode(
 
     """
     # TODO: Task 3.3 — implement token-by-token greedy decoding
-    model.eval()
+    raw = model.module if hasattr(model, 'module') else model
+    raw.eval()
  
     with torch.no_grad():
         # Encode the source sentence once — reused at every decode step
-        memory = model.encode(src, src_mask)   # [1, src_len, d_model]
+        memory = raw.encode(src, src_mask)   # [1, src_len, d_model]
  
         # Start the output sequence with just <sos>
         ys = torch.tensor([[start_symbol]], dtype=torch.long, device=device)
  
         for _ in range(max_len - 1):
-            # Build causal mask for the current (growing) output
-            tgt_mask = make_tgt_mask(ys, pad_idx=PAD_IDX)
- 
-            # One decoder step — only the last position carries new info
-            logits = model.decode(memory, src_mask, ys, tgt_mask)
-            # logits: [1, current_len, vocab_size]
- 
-            # Greedy: pick the single most likely next token
+            tgt_mask   = make_tgt_mask(ys, pad_idx=PAD_IDX)
+            logits = raw.decode(memory, src_mask, ys, tgt_mask)
             next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
-            # next_token: [1, 1]
- 
-            # Append and check for end-of-sequence
-            ys = torch.cat([ys, next_token], dim=1)   # [1, current_len+1]
- 
+            ys = torch.cat([ys, next_token], dim=1)
             if next_token.item() == end_symbol:
                 break
  
@@ -421,22 +412,24 @@ def save_checkpoint(
          'd_ff': ..., 'dropout': ...}
     """
     # TODO: implement using torch.save({...}, path)
-    enc0 = model.encoder.layers[0]
+    raw = model.module if hasattr(model, 'module') else model
+ 
+    enc0 = raw.encoder.layers[0]
 
     model_config = {
-        'src_vocab_size': model.src_embed.num_embeddings,
-        'tgt_vocab_size': model.tgt_embed.num_embeddings,
-        'd_model':        model.d_model,
-        'N':              len(model.encoder.layers),
+        'src_vocab_size': raw.src_embed.num_embeddings,
+        'tgt_vocab_size': raw.tgt_embed.num_embeddings,
+        'd_model':        raw.d_model,
+        'N':              len(raw.encoder.layers),
         'num_heads':      enc0.self_attn.num_heads,
         'd_ff':           enc0.ffn.linear1.out_features,
-        'dropout':        getattr(enc0.dropout, 'p', 0.1)
+        'dropout':        getattr(enc0.dropout, 'p', 0.1),
     }
  
     torch.save(
         {
             'epoch':                epoch,
-            'model_state_dict':     model.state_dict(),
+            'model_state_dict':     raw.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
             'model_config':         model_config,
@@ -468,7 +461,8 @@ def load_checkpoint(
     # TODO: implement restore logic
     checkpoint = torch.load(path, map_location='cpu')
  
-    model.load_state_dict(checkpoint['model_state_dict'])
+    raw = model.module if hasattr(model, 'module') else model
+    raw.load_state_dict(checkpoint['model_state_dict'])
  
     if optimizer is not None and 'optimizer_state_dict' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -567,25 +561,25 @@ def run_training_experiment() -> None:
     # TODO: implement full experiment
     config = {
         # Model architecture — matches the paper exactly
-        'd_model':      512,
-        'N':            6,
+        'd_model':      256,
+        'N':            3,
         'num_heads':    8,
-        'd_ff':         2048,
+        'd_ff':         512,
         'dropout':      0.1,
  
         # Training
         'batch_size':   128,
-        'num_epochs':   100,
+        'num_epochs':   250,
         'warmup_steps': 4000,
         'label_smooth': 0.1,
         'grad_clip':    1.0,
  
         # Data
-        'min_freq':     2,
+        'min_freq':     1,
         'max_len':      100,
  
         # Checkpoint
-        'ckpt_every':   20,     # save a checkpoint every N epochs
+        'ckpt_every':   50,     # save a checkpoint every N epochs
         'ckpt_path':    'checkpoint.pt',
     }
  
@@ -596,7 +590,7 @@ def run_training_experiment() -> None:
     wandb.init(
         project="da6401-a3",
         config=config,
-        name=f"transformer-d{config['d_model']}-N{config['N']}-h{config['num_heads']}"
+        name=f"transformer-d{config['d_model']}-N{config['N']}-h{config['num_heads']}-ff{config['d_ff']}"
     )
  
     # ── 2. Build datasets ─────────────────────────────────────────────
@@ -652,7 +646,13 @@ def run_training_experiment() -> None:
         num_heads=config['num_heads'],
         d_ff=config['d_ff'],
         dropout=config['dropout'],
+        checkpoint_path=None
     ).to(device)
+    
+    raw_model = model
+    if torch.cuda.device_count() > 1:
+        print(f"[train] {torch.cuda.device_count()} GPUs detected — using DataParallel")
+        model = torch.nn.DataParallel(model)
  
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[train] Model parameters: {param_count:,}")
@@ -714,40 +714,40 @@ def run_training_experiment() -> None:
             f"{elapsed:.0f}s"
         )
         
-        # Log sample translations every 5 epochs to track qualitative progress
-        if epoch % 5 == 0:
+        # Log sample translations every 25 epochs to track qualitative progress
+        if epoch % 25 == 0:
             log_sample_translations(
                 model, val_ds, num_samples=5, device=device, epoch=epoch,
             )
         # Save best model separately so we can restore it for BLEU eval
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            save_checkpoint(model, optimizer, scheduler, epoch, path='best_model.pt')
+            save_checkpoint(raw_model, optimizer, scheduler, epoch, path='best_model.pt')
             print(f"  ↳ new best val_loss={val_loss:.4f} — saved best_model.pt")
             
         # Periodic checkpoint so we can resume if Kaggle session restarts
         if epoch % config['ckpt_every'] == 0:
             save_checkpoint(
-                model, optimizer, scheduler, epoch,
+                raw_model, optimizer, scheduler, epoch,
                 path=f"checkpoint_ep{epoch:03d}.pt",
             )
  
     # Always save the final state
     save_checkpoint(
-        model, optimizer, scheduler, config['num_epochs'],
+        raw_model, optimizer, scheduler, config['num_epochs'],
         path=config['ckpt_path']
     )
  
     # ── 9. Final BLEU on test set ─────────────────────────────────────
     # Reload best model weights for evaluation
     print("\n[train] Evaluating best model on test set ...")
-    load_checkpoint('best_model.pt', model)
-    model.to(device)
+    load_checkpoint('best_model.pt', raw_model)
+    raw_model.to(device)
  
     bleu = evaluate_bleu(
-        model,
+        raw_model,
         test_loader,
-        tgt_vocab=train_ds.tgt_vocab,   # list[str], index → token
+        tgt_vocab=train_ds.tgt_vocab,
         device=device,
         max_len=config['max_len'],
     )
