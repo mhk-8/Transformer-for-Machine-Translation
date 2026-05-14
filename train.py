@@ -24,6 +24,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from typing import Optional
 
+import sacrebleu
 import wandb
 from tqdm import tqdm
 from model import Transformer, make_src_mask, make_tgt_mask

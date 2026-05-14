@@ -514,7 +514,24 @@ class Transformer(nn.Module):
         # TODO: Instantiate 
         # init should also load the model weights if checkpoint path provided, download the .pth file like this
         super().__init__()
- 
+
+        # ── If a checkpoint is provided, peek at its model_config to
+        #    override vocab sizes before building layers ──────────────
+        _ckpt = None
+        if checkpoint_path is not None:
+            if not os.path.exists(checkpoint_path):
+                gdown.download(id="15LMqgC_oY9li481e653gWFVj3mO9v-2s", output=checkpoint_path, quiet=False)
+            _ckpt = torch.load(checkpoint_path, map_location='cpu')
+            if 'model_config' in _ckpt:
+                _cfg = _ckpt['model_config']
+                src_vocab_size = _cfg.get('src_vocab_size', src_vocab_size)
+                tgt_vocab_size = _cfg.get('tgt_vocab_size', tgt_vocab_size)
+                d_model = _cfg.get('d_model', d_model)
+                N = _cfg.get('N', N)
+                num_heads = _cfg.get('num_heads', num_heads)
+                d_ff = _cfg.get('d_ff', d_ff)
+                dropout = _cfg.get('dropout', dropout)
+
         self.d_model = d_model
  
         # --- Embeddings ---
@@ -567,14 +584,8 @@ class Transformer(nn.Module):
         self.src_stoi = train_ds.src_stoi
         self.tgt_itos = train_ds.tgt_vocab
         
-        if checkpoint_path is not None:
-            if not os.path.exists(checkpoint_path):
-                # Ensure you paste your actual Google Drive ID here!
-                gdown.download(id="15LMqgC_oY9li481e653gWFVj3mO9v-2s", output=checkpoint_path, quiet=False)
-            
-            # Extract 'model_state_dict' from the saved checkpoint dictionary
-            checkpoint = torch.load(checkpoint_path, map_location='cpu')
-            self.load_state_dict(checkpoint['model_state_dict'])
+        if _ckpt is not None:
+            self.load_state_dict(_ckpt['model_state_dict'])
            
     def _init_weights(self) -> None:
         """Xavier uniform initialisation for all linear and embedding layers."""
