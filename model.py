@@ -520,7 +520,7 @@ class Transformer(nn.Module):
         _ckpt = None
         if checkpoint_path is not None:
             if not os.path.exists(checkpoint_path):
-                gdown.download(id="15LMqgC_oY9li481e653gWFVj3mO9v-2s", output=checkpoint_path, quiet=False)
+                gdown.download(id="1hmC24_xv3dgKZZkm6RWeSwyUY4jGytSk", output=checkpoint_path, quiet=False)
             _ckpt = torch.load(checkpoint_path, map_location='cpu')
             if 'model_config' in _ckpt:
                 _cfg = _ckpt['model_config']
