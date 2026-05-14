@@ -570,7 +570,7 @@ def run_training_experiment() -> None:
  
         # Training
         'batch_size':   128,
-        'num_epochs':   250,
+        'num_epochs':   400,
         'warmup_steps': 4000,
         'label_smooth': 0.1,
         'grad_clip':    1.0,
